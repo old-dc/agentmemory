@@ -97,6 +97,7 @@
     ::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
 
     .app-header {
+      flex: 0 0 auto;
       padding: 10px 24px;
       border-bottom: 4px solid var(--border-heavy);
       display: flex;
@@ -153,12 +154,17 @@
     .ws-status.disconnected::before { background: var(--ink-faint); }
 
     .tab-bar {
+      flex: 0 0 auto;
       display: flex;
+      min-height: 42px;
       border-bottom: 1px solid var(--border-light);
       background: var(--bg);
       overflow-x: auto;
     }
     .tab-bar button {
+      display: flex;
+      align-items: center;
+      min-height: 42px;
       background: none;
       border: none;
       color: var(--ink-muted);
@@ -598,7 +604,7 @@
     .empty-state .empty-link { color: var(--accent); text-decoration: underline; font-size: 13px; font-style: normal; }
 
     /* Feature flag banner system — compact collapsed by default */
-    .flag-banners { padding: 0 0 10px 0; }
+    .flag-banners { flex: 0 0 auto; padding: 0 0 10px 0; }
     button.flag-summary {
       display: flex; align-items: center; gap: 12px;
       padding: 8px 14px; border-radius: 4px;
