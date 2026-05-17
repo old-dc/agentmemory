@@ -6,6 +6,7 @@
   align-items: center;
   gap: 32px;
   padding: 14px 32px;
+  min-height: var(--site-nav-height);
   z-index: 100;
   background: rgba(0, 0, 0, 0.85);
   backdrop-filter: blur(10px);
@@ -111,7 +112,7 @@
   }
 }
 
-@media (max-width: 860px) {
+@media (max-width: 900px) {
   .links {
     display: none;
   }

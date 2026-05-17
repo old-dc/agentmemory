@@ -90,7 +90,7 @@
   color: var(--gold);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .hamburger {
     display: inline-flex;
   }

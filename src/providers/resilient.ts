@@ -1,12 +1,24 @@
 import type { MemoryProvider, CircuitBreakerState } from "../types.js";
 import { CircuitBreaker } from "./circuit-breaker.js";
+import { withChineseOutputDirective } from "../prompts/language.js";
 
 export class ResilientProvider implements MemoryProvider {
   private breaker = new CircuitBreaker();
   name: string;
+  describeImage?: MemoryProvider["describeImage"];
 
   constructor(private inner: MemoryProvider) {
     this.name = `resilient(${inner.name})`;
+    if (inner.describeImage) {
+      this.describeImage = async (imageData, mimeType, prompt) =>
+        this.call(() =>
+          inner.describeImage!(
+            imageData,
+            mimeType,
+            withChineseOutputDirective(prompt),
+          ),
+        );
+    }
   }
 
   private async call(fn: () => Promise<string>): Promise<string> {
@@ -24,11 +36,15 @@ export class ResilientProvider implements MemoryProvider {
   }
 
   async compress(systemPrompt: string, userPrompt: string): Promise<string> {
-    return this.call(() => this.inner.compress(systemPrompt, userPrompt));
+    return this.call(() =>
+      this.inner.compress(withChineseOutputDirective(systemPrompt), userPrompt),
+    );
   }
 
   async summarize(systemPrompt: string, userPrompt: string): Promise<string> {
-    return this.call(() => this.inner.summarize(systemPrompt, userPrompt));
+    return this.call(() =>
+      this.inner.summarize(withChineseOutputDirective(systemPrompt), userPrompt),
+    );
   }
 
   get circuitState(): CircuitBreakerState {

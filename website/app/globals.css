@@ -11,6 +11,7 @@
   --gold-soft: #ffce3e;
   --cyan: #29abe2;
   --blue: #3860be;
+  --site-nav-height: 65px;
 }
 
 * {
@@ -28,6 +29,7 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   scroll-behavior: smooth;
+  scroll-padding-top: var(--site-nav-height);
 }
 
 a {
