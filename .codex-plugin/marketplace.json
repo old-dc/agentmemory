@@ -8,9 +8,9 @@
       "name": "agentmemory",
       "source": {
         "source": "git-subdir",
-        "url": "https://github.com/rohitg00/agentmemory.git",
+        "url": "https://github.com/old-dc/agentmemory.git",
         "path": "./plugin",
-        "ref": "main"
+        "ref": "codex-custom"
       },
       "policy": {
         "installation": "AVAILABLE",
