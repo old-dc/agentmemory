@@ -1014,7 +1014,7 @@
       dashboard: { loaded: false, health: null, sessions: [], memories: [], graphStats: null, recentAudit: [], lessons: [], crystals: [] },
       graph: { loaded: false, nodes: [], edges: [], stats: null, filters: {}, selectedNode: null },
       memories: { loaded: false, items: [], search: '', typeFilter: '' },
-      timeline: { loaded: false, observations: [], sessionId: '', minImportance: 0, page: 0, pageSize: 50 },
+      timeline: { loaded: false, sessions: [], observations: [], sessionId: '', minImportance: 0, page: 0, pageSize: 50, showHookNoise: false },
       sessions: { loaded: false, items: [], selectedId: null },
       audit: { loaded: false, entries: [], opFilter: '' },
       activity: { loaded: false, observations: [], sessions: [], typeFilter: '' },
@@ -2194,22 +2194,53 @@
       el.innerHTML = '<div class="loading">Loading timeline...</div>';
       var sessResult = await apiGet('sessions');
       var sessions = (sessResult && sessResult.sessions) || [];
+      state.timeline.sessions = sessions;
       state.timeline.loaded = true;
-
-      if (sessions.length > 0 && !state.timeline.sessionId) {
-        var sorted = sessions.slice().sort(function(a, b) { return (b.startedAt || '').localeCompare(a.startedAt || ''); });
-        state.timeline.sessionId = sorted[0].id;
-      }
 
       renderTimelineToolbar(sessions);
       if (state.timeline.sessionId) await loadObservations();
     }
 
+    function normalizeTimelineText(value) {
+      return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function isTimelineInternalPromptText(value) {
+      var text = normalizeTimelineText(value).toLowerCase();
+      return text.indexOf('generate 0 to 3 hyperpersonalized suggestions') !== -1 ||
+        text.indexOf('hyperpersonalized codex') !== -1 ||
+        text.indexOf('you will be presented with a user prompt') !== -1 ||
+        text.indexOf('short title for a task') !== -1 ||
+        text.indexOf('prompt submit hook') !== -1;
+    }
+
+    function isTimelineNoiseSession(session) {
+      var text = [
+        session && session.firstPrompt,
+        session && session.title,
+        session && session.summary,
+        session && session.summaryTitle,
+      ].map(normalizeTimelineText).join(' ');
+      return isTimelineInternalPromptText(text);
+    }
+
+    function getTimelineVisibleSessions(sessions) {
+      var sorted = (sessions || []).slice().sort(function(a, b) { return (b.startedAt || '').localeCompare(a.startedAt || ''); });
+      return state.timeline.showHookNoise ? sorted : sorted.filter(function(s) { return !isTimelineNoiseSession(s); });
+    }
+
     function renderTimelineToolbar(sessions) {
       var el = document.getElementById('view-timeline');
+      var visibleSessions = getTimelineVisibleSessions(sessions);
+      if (visibleSessions.length > 0 && !visibleSessions.some(function(s) { return s.id === state.timeline.sessionId; })) {
+        state.timeline.sessionId = visibleSessions[0].id;
+      } else if (visibleSessions.length === 0) {
+        state.timeline.sessionId = '';
+      }
+      var hiddenSessionCount = Math.max(0, (sessions || []).length - visibleSessions.length);
       var html = '<div class="toolbar">';
       html += '<select id="tl-session"><option value="">Select session</option>';
-      sessions.sort(function(a, b) { return (b.startedAt || '').localeCompare(a.startedAt || ''); }).forEach(function(s) {
+      visibleSessions.forEach(function(s) {
         var label = (s.project ? s.project.split('/').pop() : s.id.slice(0,8)) + ' (' + s.id.slice(0,8) + ')';
         html += '<option value="' + esc(s.id) + '"' + (state.timeline.sessionId === s.id ? ' selected' : '') + '>' + esc(label) + '</option>';
       });
@@ -2218,7 +2249,13 @@
       for (var i = 1; i <= 9; i++) {
         html += '<option value="' + i + '"' + (state.timeline.minImportance === i ? ' selected' : '') + '>&ge; ' + i + '</option>';
       }
-      html += '</select></div>';
+      html += '</select>';
+      html += '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-muted);font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.06em;">';
+      html += '<input type="checkbox" id="tl-show-hook-noise"' + (state.timeline.showHookNoise ? ' checked' : '') + ' style="min-width:auto;flex:0 0 auto;">';
+      html += 'Show hook noise';
+      if (hiddenSessionCount > 0) html += ' <span style="font-family:var(--font-mono);color:var(--ink-faint);">(' + hiddenSessionCount + ' hidden sessions)</span>';
+      html += '</label>';
+      html += '</div>';
       html += '<div id="tl-content"></div>';
       el.innerHTML = html;
 
@@ -2229,7 +2266,19 @@
       });
       document.getElementById('tl-importance').addEventListener('change', function() {
         state.timeline.minImportance = parseInt(this.value);
+        state.timeline.page = 0;
         renderObservations();
+      });
+      document.getElementById('tl-show-hook-noise').addEventListener('change', function() {
+        var priorSessionId = state.timeline.sessionId;
+        state.timeline.showHookNoise = this.checked;
+        state.timeline.page = 0;
+        renderTimelineToolbar(state.timeline.sessions || []);
+        if (state.timeline.sessionId && state.timeline.sessionId !== priorSessionId) {
+          loadObservations();
+        } else {
+          renderObservations();
+        }
       });
     }
 
@@ -2247,27 +2296,47 @@
     }
 
     var tlTypeFilter = '';
+    var TOOL_TYPE_MAP = { Read: 'file_read', Write: 'file_write', Edit: 'file_edit', Bash: 'command_run', Grep: 'search', Glob: 'search', WebFetch: 'web_fetch', WebSearch: 'web_fetch', AskUserQuestion: 'conversation', Task: 'subagent' };
+    var TIMELINE_NOISE_TYPES = { command_run: true, file_read: true, search: true, notification: true };
+
+    function getTimelineObservationType(o) {
+      return o.type || TOOL_TYPE_MAP[o.toolName] || (o.hookType ? o.hookType.replace(/_/g, ' ') : 'other');
+    }
+
+    function isTimelineNoiseObservation(o) {
+      var type = getTimelineObservationType(o);
+      var text = [
+        o.title,
+        o.subtitle,
+        o.narrative,
+        o.summary,
+        o.content,
+        o.toolName,
+        o.hookType,
+      ].map(normalizeTimelineText).join(' ');
+      return !!TIMELINE_NOISE_TYPES[type] || isTimelineInternalPromptText(text);
+    }
 
     function renderObservations() {
       var content = document.getElementById('tl-content');
       if (!content) return;
       var obs = state.timeline.observations;
       var minImp = state.timeline.minImportance;
-      var filtered = minImp > 0 ? obs.filter(function(o) { return (o.importance || 0) >= minImp; }) : obs;
-
-      var TOOL_TYPE_MAP = { Read: 'file_read', Write: 'file_write', Edit: 'file_edit', Bash: 'command_run', Grep: 'search', Glob: 'search', WebFetch: 'web_fetch', WebSearch: 'web_fetch', AskUserQuestion: 'conversation', Task: 'subagent' };
+      var visibleObs = state.timeline.showHookNoise ? obs : obs.filter(function(o) { return !isTimelineNoiseObservation(o); });
+      var visibleCount = visibleObs.length;
+      var hiddenNoiseCount = Math.max(0, obs.length - visibleObs.length);
+      var filtered = minImp > 0 ? visibleObs.filter(function(o) { return (o.importance || 0) >= minImp; }) : visibleObs;
 
       var typeCounts = {};
       filtered.forEach(function(o) {
-        var t = o.type || TOOL_TYPE_MAP[o.toolName] || (o.hookType ? o.hookType.replace(/_/g, ' ') : 'other');
+        var t = getTimelineObservationType(o);
         typeCounts[t] = (typeCounts[t] || 0) + 1;
       });
       var typeList = Object.keys(typeCounts).sort(function(a, b) { return typeCounts[b] - typeCounts[a]; });
 
       if (tlTypeFilter) {
         filtered = filtered.filter(function(o) {
-          var t = o.type || TOOL_TYPE_MAP[o.toolName] || (o.hookType ? o.hookType.replace(/_/g, ' ') : 'other');
-          return t === tlTypeFilter;
+          return getTimelineObservationType(o) === tlTypeFilter;
         });
       }
 
@@ -2278,7 +2347,7 @@
       var totalPages = Math.ceil(filtered.length / pageSize);
 
       var html = '<div class="type-chips">';
-      html += '<span class="type-chip' + (!tlTypeFilter ? ' active' : '') + '" data-action="timeline-filter" data-type-filter="">All (' + obs.length + ')</span>';
+      html += '<span class="type-chip' + (!tlTypeFilter ? ' active' : '') + '" data-action="timeline-filter" data-type-filter="">All (' + visibleCount + ')</span>';
       typeList.forEach(function(t) {
         var color = OBS_TYPE_COLORS[t] || '#666666';
         html += '<span class="type-chip' + (tlTypeFilter === t ? ' active' : '') + '" data-action="timeline-filter" data-type-filter="' + esc(t) + '" style="' + (tlTypeFilter === t ? 'background:' + color + ';border-color:' + color + ';' : 'border-color:' + color + ';color:' + color + ';') + '">' + esc(t.replace(/_/g, ' ')) + ' (' + typeCounts[t] + ')</span>';
@@ -2286,12 +2355,12 @@
       html += '</div>';
 
       if (paged.length === 0) {
-        html += '<div class="empty-state"><div class="empty-icon">&#128337;</div><p>No observations' + (obs.length > 0 ? ' match the filter (' + obs.length + ' total)' : ' for this session') + '</p></div>';
+        html += '<div class="empty-state"><div class="empty-icon">&#128337;</div><p>No observations' + (obs.length > 0 ? ' match the filter (' + obs.length + ' total, ' + hiddenNoiseCount + ' hook noise hidden)' : ' for this session') + '</p></div>';
         content.innerHTML = html;
         return;
       }
 
-      html += '<div style="font-size:11px;color:var(--ink-faint);margin-bottom:16px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.06em;">' + filtered.length + ' observations shown</div>';
+      html += '<div style="font-size:11px;color:var(--ink-faint);margin-bottom:16px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.06em;">' + filtered.length + ' observations shown' + (hiddenNoiseCount > 0 ? ' · ' + hiddenNoiseCount + ' hook noise hidden' : '') + '</div>';
 
       html += '<div class="timeline-container">';
 
@@ -2299,7 +2368,7 @@
       paged.forEach(function(o, idx) {
         var isCompressed = !!o.narrative || !!o.type;
         var isRaw = !isCompressed;
-        var type = o.type || TOOL_TYPE_MAP[o.toolName] || 'other';
+        var type = getTimelineObservationType(o);
         var impVal = typeof o.importance === 'number' ? o.importance : 5;
         var impClass = impVal >= 7 ? 'high' : impVal >= 4 ? 'med' : 'low';
         var title = o.title || o.toolName || (o.hookType ? o.hookType.replace(/_/g, ' ') : 'Observation');
